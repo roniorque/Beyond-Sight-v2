@@ -1,0 +1,343 @@
+main.dart:
+import 'package:flutter/material.dart';
+import 'detector.dart';
+import 'speech.dart';
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatefulWidget {
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  String _objectToFind = ''; // Store the object to find based on the speech command
+
+  // Update the object to find based on the recognized command
+  void _updateObjectToFind(String object) {
+    setState(() {
+      _objectToFind = object;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(
+          title: const Text('Object Detection with Voice Command'),
+        ),
+        body: Stack(
+          children: [
+            // Object detection screen, passing the object to find from speech
+            ObjectDetectionScreen(objectToFind: _objectToFind),
+            // Speech command button
+            Positioned(
+              bottom: 30,
+              right: 30,
+              child: SpeechCommand(
+                onCommandRecognized: _updateObjectToFind, // Update the object to find
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+detector.dart:
+import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
+import 'package:flutter_vision/flutter_vision.dart';
+
+import 'boundingbox.dart';
+
+List<CameraDescription>? cameras;
+
+class ObjectDetectionScreen extends StatefulWidget {
+  final String objectToFind; // Pass the object to find from speech
+
+  const ObjectDetectionScreen({super.key, required this.objectToFind});
+
+  @override
+  _ObjectDetectionScreenState createState() => _ObjectDetectionScreenState();
+}
+
+class _ObjectDetectionScreenState extends State<ObjectDetectionScreen> {
+  late FlutterVision vision;
+  CameraController? controller;
+  bool isDetecting = false;
+  List<dynamic> detections = [];
+  bool modelLoaded = false;
+  String latency = "0 ms"; // Variable to hold latency value
+
+  @override
+  void initState() {
+    super.initState();
+    initializeCameras();
+  }
+
+  // Initialize the cameras and load the model
+  Future<void> initializeCameras() async {
+    try {
+      cameras = await availableCameras();
+      if (cameras == null || cameras!.isEmpty) {
+        throw Exception('No cameras found');
+      }
+
+      controller = CameraController(
+        cameras![0],
+        ResolutionPreset.high, // Lower resolution for faster processing
+      );
+
+      await controller?.initialize();
+      await loadYoloModel();
+
+      if (!mounted) return;
+
+      controller?.startImageStream((CameraImage image) {
+        if (!isDetecting && modelLoaded) {
+          isDetecting = true;
+          detectObjects(image);
+        }
+      });
+
+      setState(() {});
+    } catch (e) {
+      print('Error initializing cameras: $e');
+    }
+  }
+
+  // Load the YOLOv8 model
+  Future<void> loadYoloModel() async {
+    vision = FlutterVision();
+    await vision.loadYoloModel(
+      labels: 'assets/coco_classes.txt',
+      modelPath: 'assets/best_float16.tflite',
+      modelVersion: 'yolov8',
+      quantization: false,
+      numThreads: 4,
+      useGpu: true,
+    );
+    modelLoaded = true;
+  }
+
+  // Perform object detection on each frame
+  Future<void> detectObjects(CameraImage image) async {
+    final stopwatch = Stopwatch()..start();
+
+    final result = await vision.yoloOnFrame(
+      bytesList: image.planes.map((plane) => plane.bytes).toList(),
+      imageHeight: image.height,
+      imageWidth: image.width,
+      iouThreshold: 0.4,
+      confThreshold: 0.2,
+      classThreshold: 0.2,
+    );
+
+    stopwatch.stop();
+
+    setState(() {
+      // Filter detections based on speech command
+      detections = result.where((detection) {
+        return detection['tag'] == widget.objectToFind.toLowerCase();
+      }).toList();
+
+      latency = '${stopwatch.elapsed.inMilliseconds} ms';
+    });
+
+    isDetecting = false;
+  }
+
+  @override
+  void dispose() {
+    controller?.dispose();
+    vision.closeYoloModel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (controller == null || !controller!.value.isInitialized) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        return Stack(
+          children: [
+            SizedBox(
+              width: constraints.maxWidth,
+              height: constraints.maxHeight,
+              child: FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: controller!.value.previewSize!.height,
+                  height: controller!.value.previewSize!.width,
+                  child: CameraPreview(controller!),
+                ),
+              ),
+            ),
+            // Include the bounding box overlay
+            _buildBoundingBoxOverlay(),
+          ],
+        );
+      },
+    );
+  }
+
+  // Move this method to the separate bounding box file
+  Widget _buildBoundingBoxOverlay() {
+    return CustomPaint(
+      painter: BoundingBoxPainter(detections, controller!, latency),
+      child: Container(),
+    );
+  }
+}
+
+boundingbox.dart:
+import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
+import 'dart:ui' as ui;
+
+class BoundingBoxPainter extends CustomPainter {
+  final List<dynamic> detections;
+  final CameraController cameraController;
+  final String latency;
+
+  BoundingBoxPainter(this.detections, this.cameraController, this.latency);
+
+  @override
+  void paint(ui.Canvas canvas, ui.Size size) {
+    final paint = Paint()
+      ..color = Colors.red // High contrast color for bounding box
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0; // Increase stroke width for visibility
+
+    // Get the camera preview size and the size of the canvas where we draw
+    final previewSize = cameraController.value.previewSize!;
+    final double scaleX = size.width / previewSize.height;
+    final double scaleY = size.height / previewSize.width;
+
+    for (var detection in detections) {
+      final box = detection['box']; // Assuming this is [left, top, right, bottom, confidence]
+      if (box.length == 5) { // Ensure box format is correct
+        // Scale the bounding box coordinates to fit the screen
+        final left = box[0] * scaleX;
+        final top = box[1] * scaleY;
+        final right = box[2] * scaleX;
+        final bottom = box[3] * scaleY;
+
+        // Draw rectangle using the scaled coordinates
+        canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), paint);
+
+        // Draw the confidence text above the bounding box
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: '${(box[4] * 100).toStringAsFixed(2)}% - ${detection['tag']}',
+            style: const TextStyle(color: Colors.red, fontSize: 16),
+          ),
+          textDirection: ui.TextDirection.ltr,
+        );
+
+        textPainter.layout();
+        textPainter.paint(canvas, Offset(left, top - 20)); // Adjust the position as needed
+      }
+    }
+
+    // Draw latency text on the screen
+    final latencyTextPainter = TextPainter(
+      text: TextSpan(
+        text: 'Latency: $latency',
+        style: const TextStyle(color: Colors.white, fontSize: 16),
+      ),
+      textDirection: ui.TextDirection.ltr,
+    );
+
+    latencyTextPainter.layout();
+    latencyTextPainter.paint(canvas, const Offset(16, 16)); // Position the latency text
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true; // Always repaint for new detections
+  }
+}
+
+speech.dart:
+import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+class SpeechCommand extends StatefulWidget {
+  final Function(String) onCommandRecognized;
+
+  const SpeechCommand({super.key, required this.onCommandRecognized});
+
+  @override
+  _SpeechCommandState createState() => _SpeechCommandState();
+}
+
+class _SpeechCommandState extends State<SpeechCommand> {
+  late stt.SpeechToText _speech;
+  bool _isListening = false;
+  String _command = ''; // To store the recognized object from speech command
+
+  @override
+  void initState() {
+    super.initState();
+    _speech = stt.SpeechToText();
+  }
+
+  // Function to handle speech recognition and command processing
+  void _listen() async {
+    if (!_isListening) {
+      bool available = await _speech.initialize(
+        onStatus: (val) => print('onStatus: $val'),
+        onError: (val) => print('onError: $val'),
+      );
+      if (available) {
+        setState(() {
+          _isListening = true;
+        });
+        _speech.listen(
+          onResult: (val) => setState(() {
+            _command = val.recognizedWords.toLowerCase(); // Convert speech to lowercase command
+            if (_command.contains('find')) {  // If the command contains "find"
+              _command = _command.replaceAll('find', '').trim();  // Remove 'find' and extract the object
+              print('Command to find: $_command');
+              widget.onCommandRecognized(_command); // Pass the command to object detection logic
+            } else {
+              print("Command doesn't contain 'find'");
+              widget.onCommandRecognized(''); // If no valid command, don't recognize
+            }
+          }),
+          listenFor: Duration(seconds: 5), // Increase listen time if needed
+        );
+      }
+    } else {
+      setState(() {
+        _isListening = false;
+        widget.onCommandRecognized(''); // Ensure object detection is turned off when microphone is turned off
+      });
+      _speech.stop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton(
+      onPressed: _listen,
+      child: Icon(_isListening ? Icons.mic : Icons.mic_none),
+    );
+  }
+
+  @override
+  void dispose() {
+    _speech.stop();
+    super.dispose();
+  }
+}
