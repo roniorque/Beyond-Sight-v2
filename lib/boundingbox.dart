@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'dart:ui' as ui;
@@ -5,63 +6,95 @@ import 'dart:ui' as ui;
 class BoundingBoxPainter extends CustomPainter {
   final List<dynamic> detections;
   final CameraController cameraController;
-  final String latency;
+  final String selectedObject;
+  bool _lookingForObjectAudioTriggered = false;
+  bool _obstacleWarningAudioTriggered = false;
 
-  BoundingBoxPainter(this.detections, this.cameraController, this.latency);
+  BoundingBoxPainter(this.detections, this.cameraController, {this.selectedObject = ''});
 
   @override
   void paint(ui.Canvas canvas, ui.Size size) {
-    final paint = Paint()
-      ..color = Colors.red // High contrast color for bounding box
+    final Paint selectedPaint = Paint()
+      ..color = Colors.green  // Green for selected object or all objects in DetectAllObjectsPage
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.0; // Increase stroke width for visibility
+      ..strokeWidth = 3.0;
 
-    // Get the camera preview size and the size of the canvas where we draw
+    final Paint obstaclePaint = Paint()
+      ..color = Colors.red  // Red for obstacles
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.0;
+
     final previewSize = cameraController.value.previewSize!;
     final double scaleX = size.width / previewSize.height;
     final double scaleY = size.height / previewSize.width;
 
+    bool shouldShowObstacleBoundingBox = false;
+
     for (var detection in detections) {
-      final box = detection['box']; // Assuming this is [left, top, right, bottom, confidence]
-      if (box.length == 5) { // Ensure box format is correct
-        // Scale the bounding box coordinates to fit the screen
+      final box = detection['box'];
+      if (box.length == 5) {
         final left = box[0] * scaleX;
         final top = box[1] * scaleY;
         final right = box[2] * scaleX;
         final bottom = box[3] * scaleY;
 
-        // Draw rectangle using the scaled coordinates
-        canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), paint);
+        // If 'selectedObject' is empty, consider all objects as 'selected' in DetectAllObjectsPage
+        final isSelected = selectedObject.isEmpty || detection['tag'].toLowerCase() == selectedObject.toLowerCase();
+        final isObstacle = !isSelected;
 
-        // Draw the confidence text above the bounding box
+        if (isSelected && !_lookingForObjectAudioTriggered) {
+          _triggerLookingForObjectAudio();
+        }
+
+        if (isObstacle) {
+          shouldShowObstacleBoundingBox = true;
+          _triggerObstacleWarning();
+        }
+
+        // Draw the bounding box and text
+        if (isSelected) {
+          canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), selectedPaint);
+        } else if (shouldShowObstacleBoundingBox) {
+          canvas.drawRect(Rect.fromLTRB(left, top, right, bottom), obstaclePaint);
+        }
+
         final textPainter = TextPainter(
           text: TextSpan(
-            text: '${(box[4] * 100).toStringAsFixed(2)}% - ${detection['tag']}',
-            style: const TextStyle(color: Colors.red, fontSize: 16),
+            text: '${(box[4] * 100).toInt()}% - ${detection['tag']}',
+            style: TextStyle(color: isSelected ? Colors.green : Colors.red, fontSize: 16),
           ),
           textDirection: ui.TextDirection.ltr,
         );
 
         textPainter.layout();
-        textPainter.paint(canvas, Offset(left, top - 20)); // Adjust the position as needed
+        textPainter.paint(canvas, Offset(left, top - 20));
       }
     }
 
-    // Draw latency text on the screen
-    final latencyTextPainter = TextPainter(
-      text: TextSpan(
-        text: 'Latency: $latency',
-        style: const TextStyle(color: Colors.white, fontSize: 16),
-      ),
-      textDirection: ui.TextDirection.ltr,
-    );
+    if (shouldShowObstacleBoundingBox) {
+      print('Obstacle Detected.');
+    }
+  }
 
-    latencyTextPainter.layout();
-    latencyTextPainter.paint(canvas, const Offset(16, 16)); // Position the latency text
+  void _triggerLookingForObjectAudio() {
+    if (!_lookingForObjectAudioTriggered) {
+      _lookingForObjectAudioTriggered = true;
+      print('Looking for $selectedObject.');
+    }
+  }
+
+  void _triggerObstacleWarning() {
+    if (!_obstacleWarningAudioTriggered) {
+      _obstacleWarningAudioTriggered = true;
+      print('Obstacle detected. Triggering warning.');
+      Future.delayed(Duration(seconds: 3), () {
+        _obstacleWarningAudioTriggered = false;
+      });
+    }
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true; // Always repaint for new detections
+    return true;
   }
 }

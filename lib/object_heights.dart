@@ -1,5 +1,5 @@
 const Map<String, double> objectHeights = {
-  'person': 170.0, // Average human height in cm
+  'person': 170.0, // Average human height in cm // 70cm
   'bicycle': 100.0,
   'car': 150.0,
   'motorcycle': 120.0,

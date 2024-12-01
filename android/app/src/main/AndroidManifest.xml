@@ -5,9 +5,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.VIBRATE" />
     
     <application
-        android:label="fluttervis"
+        android:label="Beyond Sight"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

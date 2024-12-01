@@ -3,8 +3,13 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 class SpeechCommand extends StatefulWidget {
   final Function(String) onCommandRecognized;
+  final Function(bool) onListeningStateChanged; // Notify parent when mic is toggled
 
-  const SpeechCommand({super.key, required this.onCommandRecognized});
+  const SpeechCommand({
+    super.key,
+    required this.onCommandRecognized,
+    required this.onListeningStateChanged, // Add this parameter
+  });
 
   @override
   _SpeechCommandState createState() => _SpeechCommandState();
@@ -32,6 +37,7 @@ class _SpeechCommandState extends State<SpeechCommand> {
         setState(() {
           _isListening = true;
         });
+        widget.onListeningStateChanged(true); // Notify parent that mic is on
         _speech.listen(
           onResult: (val) => setState(() {
             _command = val.recognizedWords.toLowerCase(); // Convert speech to lowercase command
@@ -57,6 +63,8 @@ class _SpeechCommandState extends State<SpeechCommand> {
     setState(() {
       _isListening = false;
       _speech.stop();
+      widget.onListeningStateChanged(false); // Notify parent that mic is off
+      widget.onCommandRecognized(''); // Notify parent to stop object detection
     });
   }
 
@@ -64,7 +72,15 @@ class _SpeechCommandState extends State<SpeechCommand> {
   Widget build(BuildContext context) {
     return FloatingActionButton(
       onPressed: _listen,
-      child: Icon(_isListening ? Icons.mic : Icons.mic_none),
+      backgroundColor: _isListening ? Colors.redAccent : Colors.blueAccent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(50),
+      ),
+      child: Icon(
+        _isListening ? Icons.mic : Icons.mic_none,
+        size: 30,
+        color: Colors.white,
+      ),
     );
   }
 
